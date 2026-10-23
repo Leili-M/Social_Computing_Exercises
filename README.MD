@@ -1,3 +1,9 @@
+# My Coding Assignments
+
+- [Coding Assignment 1: Contribution and Commitment](assignments/coding-assignment-1.md)
+
+---
+
 # Mini Social
 
 This is a mock social media platform created for the Social Computing course at the University of Oulu by Dr. Aku Visuri and Daniel Szabo.

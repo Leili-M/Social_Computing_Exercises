@@ -1,0 +1,53 @@
+{% extends "base.html.j2" %}
+{% block content %}
+{#
+  Coding Assignment 1 - Feature 1: "Needs a reply"
+  Design Claim 1 (Chapter 2): the list of needed contributions is made easily visible.
+#}
+
+<div class="col-md-8 mx-auto">
+
+  <!-- Page header: explains to the user why this page exists -->
+  <h2 class="text-center border-bottom pb-2 mb-3">💬 Needs a reply</h2>
+  <p class="text-center text-muted mb-4">
+    These posts have not received any reply yet.
+    Be the first to answer and make someone feel heard!
+  </p>
+
+  {% for post in posts %}
+  <div class="card mb-4" id="post-{{ post.id }}">
+    <div class="card-body">
+
+      <!-- Author and date -->
+      <div class="d-flex justify-content-between align-items-center">
+        <a href="/u/{{ post.username }}"><strong>@{{ post.username }}</strong></a>
+        <small class="text-muted">{{ post.created_at|datetimeformat }}</small>
+      </div>
+
+      <!-- Post content -->
+      <p class="mt-2">{{ post.content }}</p>
+
+      <!-- Reply form: lets the user answer directly from this page.
+           It uses the existing comment route, which sends the user back here,
+           so the answered post disappears from the list. -->
+      {% if session.get('user_id') %}
+      <form action="/posts/{{ post.id }}/comment" method="POST">
+        <div class="mb-2">
+          <textarea class="form-control" name="content" rows="2"
+                    placeholder="Write the first reply..." required></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm float-end">Be the first to reply</button>
+      </form>
+      {% else %}
+      <a href="/login" class="btn btn-light btn-sm">Log in to reply</a>
+      {% endif %}
+
+    </div>
+  </div>
+  {% else %}
+  <!-- Shown when every post already has at least one reply -->
+  <p class="text-center">🎉 Great job! Every post has a reply right now.</p>
+  {% endfor %}
+
+</div>
+{% endblock %}

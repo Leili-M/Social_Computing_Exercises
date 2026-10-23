@@ -1,0 +1,39 @@
+{#
+  Coding Assignment 1 - Feature 3: Recent activity from people you follow
+  Design Claim 15 (Chapter 3): showing information about members and their recent activities
+  promotes bonds-based commitment.
+#}
+<div class="col-md-8 mx-auto mb-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <h5 class="card-title mb-3">👥 Recent activity from people you follow</h5>
+
+      {% for act in following_activity %}
+      <div class="d-flex align-items-start mb-2">
+        <!-- Small round avatar with the first letter of the username -->
+        <span class="rounded-circle text-white d-inline-flex justify-content-center align-items-center me-2 flex-shrink-0"
+              style="width: 32px; height: 32px; background-color: {{ act.color }};">
+          {{ act.username[0]|upper }}
+        </span>
+
+        <div>
+          <!-- Who did what, with links to their profile and to the post -->
+          <a href="/u/{{ act.username }}"><strong>@{{ act.username }}</strong></a>
+          {% if act.kind == 'post' %}
+            wrote a <a href="/posts/{{ act.post_id }}">new post</a>
+          {% else %}
+            commented on <a href="/posts/{{ act.post_id }}">a post</a>
+          {% endif %}
+          <small class="text-muted">· {{ act.created_at|datetimeformat }}</small>
+          <div class="text-muted small">"{{ act.content|truncate(80) }}"</div>
+        </div>
+      </div>
+      {% else %}
+      <!-- The user does not follow anyone yet -->
+      <p class="text-muted mb-0">
+        You are not following anyone yet. Follow people to see what they are up to here!
+      </p>
+      {% endfor %}
+    </div>
+  </div>
+</div>

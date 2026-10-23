@@ -21,7 +21,15 @@
   </div>
 </div>
 {% endif %}
+<!-- Coding Assignment 1 - Feature 2: weekly goals card (only for logged-in users) -->
+{% if weekly_goals %}
+  {% include "goals_card.html.j2" %}
+{% endif %}
 
+<!-- Coding Assignment 1 - Feature 3: recent activity of people you follow (only for logged-in users) -->
+{% if following_activity is not none %}
+  {% include "following_activity.html.j2" %}
+{% endif %}
 <h2 class="text-center border-bottom pb-2 mb-4"><span>Posts</span></h2>
 
 <div class="mb-4 text-center">
@@ -77,6 +85,30 @@
       </div>
       
       <p class="mt-2">{{ entry.post.content }}</p>
+      
+      <!-- Coding Assignment 1 - Feature 3 (Design Claim 15, Chapter 3):
+           show which people you follow reacted to or commented on this post -->
+      {% if entry.followed_engagers %}
+      <div class="d-flex align-items-center mb-2 small text-muted">
+        <span class="me-1">👥</span>
+        {% for person in entry.followed_engagers %}
+          <a href="/u/{{ person.username }}" title="@{{ person.username }}"
+             class="rounded-circle text-white d-inline-flex justify-content-center align-items-center me-1 text-decoration-none"
+             style="width: 22px; height: 22px; font-size: 12px; background-color: {{ person.color }};">
+            {{ person.username[0]|upper }}
+          </a>
+        {% endfor %}
+        <span class="ms-1">
+          <a href="/u/{{ entry.followed_engagers[0].username }}">@{{ entry.followed_engagers[0].username }}</a>
+          {% if entry.followed_engagers|length > 1 %}
+            and {{ entry.followed_engagers|length - 1 }} other{{ 's' if entry.followed_engagers|length > 2 }} you follow
+          {% else %}
+            (you follow)
+          {% endif %}
+          interacted with this
+        </span>
+      </div>
+      {% endif %}
 
       <!-- Reactions Display and Add Reaction Button -->
       <div class="d-flex align-items-center mt-2 mb-2">

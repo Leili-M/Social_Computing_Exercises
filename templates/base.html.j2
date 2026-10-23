@@ -37,6 +37,13 @@
         <li class="nav-item">
           <a href="/" class="nav-link">Home</a>
         </li>
+                <!-- Coding Assignment 1 - Feature 1: link to posts that need a reply (Design Claim 1).
+             The red badge shows how many posts are still waiting for an answer. -->
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('unanswered_posts') }}">
+            Needs a reply <span class="badge bg-danger">{{ unanswered_count }}</span>
+          </a>
+        </li>
         <li class="nav-item">
           <a class="nav-link" href="/about">About</a>
         </li>

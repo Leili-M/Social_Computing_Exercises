@@ -6,7 +6,7 @@ import json
 import sqlite3
 import hashlib
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 app.secret_key = '123456789' 
@@ -26,6 +26,24 @@ MODERATION_CONFIG = json.loads(decrypted_data)
 TIER1_WORDS = MODERATION_CONFIG['categories']['tier1_severe_violations']['words']
 TIER2_PHRASES = MODERATION_CONFIG['categories']['tier2_spam_scams']['phrases']
 TIER3_WORDS = MODERATION_CONFIG['categories']['tier3_mild_profanity']['words']
+
+# ---------------------------------------------------------------
+# Coding Assignment 1 - Feature 2: create the table for weekly goals.
+# "CREATE TABLE IF NOT EXISTS" only creates it the first time the app starts.
+# Each row is one user's goals for one week (week_start = the Monday of that week).
+# ---------------------------------------------------------------
+with sqlite3.connect(DATABASE) as setup_conn:
+    setup_conn.execute('''
+        CREATE TABLE IF NOT EXISTS weekly_goals (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       INTEGER NOT NULL,
+            week_start    TEXT    NOT NULL,
+            posts_goal    INTEGER NOT NULL,
+            comments_goal INTEGER NOT NULL,
+            help_goal     INTEGER NOT NULL,
+            UNIQUE (user_id, week_start)
+        )
+    ''')
 
 def get_db():
     """
@@ -183,16 +201,23 @@ def feed():
             comment_dict = dict(comment)
             comment_dict['content'], _ = moderate_content(comment_dict['content'])
             comments_moderated.append(comment_dict)
+                # Coding Assignment 1 - Feature 3: people you follow who reacted to or commented on this post
+        followed_engagers = get_followed_engagers(current_user_id, post['id']) if current_user_id else []
         posts_data.append({
             'post': post_dict,
+            'followed_engagers': followed_engagers,
             'reactions': reactions,
             'user_reaction': user_reaction,
             'followed_poster': followed_poster,
             'comments': comments_moderated
         })
-
+    # Coding Assignment 1 - Feature 2: data for the weekly goals card (only for logged-in users)
+    weekly_goals = get_weekly_goals(current_user_id) if current_user_id else None
+    following_activity = get_following_activity(current_user_id) if current_user_id else None
     #  4. Render Template with Pagination Info 
     return render_template('feed.html.j2', 
+                           weekly_goals = weekly_goals,
+                           following_activity=following_activity,
                            posts=posts_data, 
                            current_sort=sort,
                            current_show=show,
@@ -865,6 +890,230 @@ def loop_color(user_id):
     b = int(h[4:6], 16)
     return f'rgb({r % 128 + 80}, {g % 128 + 80}, {b % 128 + 80})'
 
+
+
+# ---------------------------------------------------------------
+# Coding Assignment 1 - Feature 1: "Needs a reply"
+# Design Claim 1 (Chapter 2): Making the list of needed contributions
+# easily visible increases the likelihood that the community will
+# provide them.
+# This page lists posts that have not received any comment yet,
+# so users can easily see where their contribution is needed.
+# ---------------------------------------------------------------
+
+@app.route('/unanswered')
+def unanswered_posts():
+    """Shows posts that nobody has replied to yet."""
+    current_user_id = session.get('user_id')
+
+    # Find posts that have no comments at all (newest first).
+    # The user's own posts are not shown, because they cannot reply to themselves.
+    # If nobody is logged in, -1 is used so no posts are excluded.
+    posts_raw = query_db('''
+        SELECT p.id, p.content, p.created_at, u.username, u.id AS user_id
+        FROM posts p
+        JOIN users u ON p.user_id = u.id
+        WHERE p.id NOT IN (SELECT post_id FROM comments)
+          AND p.user_id != ?
+        ORDER BY p.created_at DESC
+        LIMIT 20
+    ''', (current_user_id or -1,))
+
+    # Run the posts through moderation, like the rest of the site does
+    posts = []
+    for post_raw in posts_raw:
+        post = dict(post_raw)
+        post['content'], _ = moderate_content(post['content'])
+        posts.append(post)
+
+    return render_template('unanswered.html.j2', posts=posts)
+
+
+@app.context_processor
+def inject_unanswered_count():
+    """
+    Makes the number of unanswered posts available in every template,
+    so it can be shown as a badge next to the "Needs a reply" link in the menu.
+    """
+    current_user_id = session.get('user_id') or -1
+    row = query_db('''
+        SELECT COUNT(*) AS cnt
+        FROM posts
+        WHERE id NOT IN (SELECT post_id FROM comments)
+          AND user_id != ?
+    ''', (current_user_id,), one=True)
+    return {'unanswered_count': row['cnt'] if row else 0}
+
+
+# ---------------------------------------------------------------
+# Coding Assignment 1 - Feature 2: Weekly goals
+# Design Claim 13 (Chapter 2): Providing members with specific and highly
+# challenging goals, whether self-set or system-suggested, increases contribution.
+# Also supports:
+#   Design Claim 14: goals with specific deadlines (the week ends on Sunday)
+#   Design Claim 15: frequent feedback about performance (progress bars)
+# The user sets their own goals for the week, and a card on the feed
+# shows their progress towards each goal.
+# ---------------------------------------------------------------
+def get_week_start(day=None):
+    """Returns the Monday (as a datetime at 00:00) of the week that 'day' belongs to."""
+    day = day or datetime.utcnow()
+    monday = day - timedelta(days=day.weekday())
+    return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def count_activity(user_id, start, end):
+    """
+    Counts what a user did between 'start' and 'end':
+    posts written, comments written, and "helps"
+    (a help = being the FIRST person to comment on someone else's post).
+    """
+    start_s = start.strftime('%Y-%m-%d %H:%M:%S')
+    end_s = end.strftime('%Y-%m-%d %H:%M:%S')
+
+    posts = query_db(
+        'SELECT COUNT(*) AS cnt FROM posts WHERE user_id = ? AND created_at >= ? AND created_at < ?',
+        (user_id, start_s, end_s), one=True)['cnt']
+
+    comments = query_db(
+        'SELECT COUNT(*) AS cnt FROM comments WHERE user_id = ? AND created_at >= ? AND created_at < ?',
+        (user_id, start_s, end_s), one=True)['cnt']
+
+    # A comment counts as a "help" if it was the first comment on that post
+    # (it has the smallest id of all comments on the post) and the post is not the user's own.
+    helps = query_db('''
+        SELECT COUNT(*) AS cnt
+        FROM comments c
+        JOIN posts p ON p.id = c.post_id
+        WHERE c.user_id = ? AND c.created_at >= ? AND c.created_at < ?
+          AND p.user_id != ?
+          AND c.id = (SELECT MIN(id) FROM comments WHERE post_id = c.post_id)
+    ''', (user_id, start_s, end_s, user_id), one=True)['cnt']
+
+    return {'posts': posts, 'comments': comments, 'help': helps}
+
+
+def get_weekly_goals(user_id):
+    """Collects everything the goals card on the feed needs for the logged-in user."""
+    week_start = get_week_start()
+    week_end = week_start + timedelta(days=7)
+    last_week_start = week_start - timedelta(days=7)
+
+    # The goals the user set for this week (None if they have not set any yet)
+    goals = query_db(
+        'SELECT posts_goal, comments_goal, help_goal FROM weekly_goals WHERE user_id = ? AND week_start = ?',
+        (user_id, week_start.strftime('%Y-%m-%d')), one=True)
+
+    done = count_activity(user_id, week_start, week_end)          # progress this week
+    last_week = count_activity(user_id, last_week_start, week_start)  # shown as a hint
+
+    # One entry per goal type, used to draw the inputs and the progress bars.
+    # (Named goal_list, not "items", because "items" would clash with dict.items() in the template.)
+    goal_list = []
+    for key, icon, label in [('posts', '✍️', 'Posts'),
+                             ('comments', '💬', 'Comments'),
+                             ('help', '🤝', 'Help unanswered posts')]:
+        target = goals[key + '_goal'] if goals else 0
+        percent = min(100, int(done[key] * 100 / target)) if target else 0
+        goal_list.append({
+            'key': key, 'icon': icon, 'label': label,
+            'done': done[key], 'target': target, 'percent': percent,
+            'reached': target > 0 and done[key] >= target,
+            'last_week': last_week[key],
+        })
+
+    days_left = (week_end - datetime.utcnow()).days + 1   # deadline countdown (Design Claim 14)
+    return {
+        'has_goals': goals is not None,
+        'goal_list': goal_list,
+        'days_left': days_left,
+        'all_reached': goals is not None and all(i['reached'] for i in goal_list),
+    }
+
+
+@app.route('/goals', methods=['POST'])
+def save_goals():
+    """Saves (or updates) the goals the user chose for the current week."""
+    user_id = session.get('user_id')
+    if not user_id:
+        flash('You must be logged in to set goals.', 'danger')
+        return redirect(url_for('login'))
+
+    # Read the three numbers from the form. They must be whole numbers from 1 to 50.
+    try:
+        values = [int(request.form.get(name, 0)) for name in ('posts', 'comments', 'help')]
+    except ValueError:
+        values = [0]
+    if not all(1 <= v <= 50 for v in values):
+        flash('Each goal must be a number from 1 to 50.', 'warning')
+        return redirect(url_for('feed'))
+
+    # INSERT OR REPLACE: creates the goals, or overwrites them if the user edits them.
+    # This works because (user_id, week_start) is UNIQUE in the table.
+    week_start = get_week_start().strftime('%Y-%m-%d')
+    db = get_db()
+    db.execute('''
+        INSERT OR REPLACE INTO weekly_goals (user_id, week_start, posts_goal, comments_goal, help_goal)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (user_id, week_start, *values))
+    db.commit()
+
+    flash('Your goals for this week are saved. Good luck! 🎯', 'success')
+    return redirect(url_for('feed'))
+
+
+# ---------------------------------------------------------------
+# Coding Assignment 1 - Feature 3: Activity of people you follow
+# Design Claim 15 (Chapter 3): Displaying photos and information about
+# individual members and their recent activities promotes bonds-based commitment.
+# 1) Under each post in the feed, we show which people you follow reacted to it
+#    or commented on it (with a small avatar and a link to their profile).
+# 2) A card on the feed lists the latest posts and comments of people you follow.
+# ---------------------------------------------------------------
+def get_followed_engagers(user_id, post_id):
+    """Returns (up to 5) people the user follows who reacted to or commented on the post."""
+    rows = query_db('''
+        SELECT DISTINCT u.id, u.username
+        FROM users u
+        WHERE u.id IN (SELECT followed_id FROM follows WHERE follower_id = ?)
+          AND (u.id IN (SELECT user_id FROM reactions WHERE post_id = ?)
+               OR u.id IN (SELECT user_id FROM comments WHERE post_id = ?))
+        LIMIT 5
+    ''', (user_id, post_id, post_id))
+
+    # Add an avatar color for each person (loop_color makes the same color for the same user every time)
+    return [{'id': r['id'], 'username': r['username'], 'color': loop_color(r['id'])} for r in rows]
+
+
+def get_following_activity(user_id, limit=5):
+    """
+    Returns the latest posts and comments written by people the user follows.
+    The reactions table has no time column, so only posts and comments can be ordered by time.
+    """
+    rows = query_db('''
+        SELECT 'post' AS kind, p.id AS post_id, u.id AS user_id, u.username, p.content, p.created_at AS created_at
+        FROM posts p
+        JOIN users u ON u.id = p.user_id
+        WHERE p.user_id IN (SELECT followed_id FROM follows WHERE follower_id = ?)
+
+        UNION ALL
+
+        SELECT 'comment' AS kind, c.post_id AS post_id, u.id AS user_id, u.username, c.content, c.created_at AS created_at
+        FROM comments c
+        JOIN users u ON u.id = c.user_id
+        WHERE c.user_id IN (SELECT followed_id FROM follows WHERE follower_id = ?)
+
+        ORDER BY created_at DESC
+        LIMIT ?
+    ''', (user_id, user_id, limit))
+
+    activity = []
+    for row in rows:
+        item = dict(row)
+        item['content'], _ = moderate_content(item['content'])   # same moderation as the rest of the site
+        item['color'] = loop_color(item['user_id'])
+        activity.append(item)
+    return activity
 
 # ----- Functions to be implemented are below
 # Coding Assignment #2

@@ -1,0 +1,78 @@
+{#
+  Coding Assignment 1 - Feature 2: Weekly goals card (shown at the top of the feed)
+  Design Claim 13: specific, self-set goals
+  Design Claim 14: a deadline (days left in the week)
+  Design Claim 15: frequent feedback (progress bars that update after every post or comment)
+#}
+<div class="col-md-8 mx-auto mb-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
+
+      <!-- Title and deadline countdown -->
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="card-title mb-0">🎯 Your goals this week</h5>
+        <span class="badge bg-secondary">⏳ {{ weekly_goals.days_left }} day{{ 's' if weekly_goals.days_left != 1 }} left</span>
+      </div>
+
+      {% if weekly_goals.has_goals %}
+        <!-- The user already set goals: show one progress bar per goal -->
+        {% for item in weekly_goals.goal_list %}
+        <div class="mb-2">
+          <div class="d-flex justify-content-between">
+            <span>{{ item.icon }} {{ item.label }}</span>
+            <span>
+              {{ item.done }} / {{ item.target }}
+              {% if item.reached %}<span class="text-success fw-bold">🎉 Goal reached!</span>{% endif %}
+            </span>
+          </div>
+          <div class="progress" style="height: 10px;">
+            <div class="progress-bar {{ 'bg-success' if item.reached else 'bg-primary' }}"
+                 role="progressbar" style="width: {{ item.percent }}%;"></div>
+          </div>
+        </div>
+        {% endfor %}
+
+        {% if weekly_goals.all_reached %}
+        <p class="text-success fw-bold mt-2 mb-0">🏆 Amazing! You reached all your goals this week.</p>
+        {% endif %}
+
+               <div class="mt-3">
+          <a href="{{ url_for('unanswered_posts') }}" class="btn btn-light btn-sm">🤝 Find posts that need a reply</a>
+        </div>
+      {% else %}
+        <!-- No goals yet: invite the user to set their own -->
+        <p class="text-muted mb-2">Set your own goals for this week. Pick numbers that are a bit of a challenge for you!</p>
+      {% endif %}
+
+      <!-- Goal form: shown directly if the user has no goals yet.
+           If they already have goals, it is hidden inside <details>, a built-in HTML element
+           that opens and closes when "Edit my goals" is clicked (no JavaScript needed). -->
+      {% if weekly_goals.has_goals %}
+      <details class="mt-3">
+             <summary class="btn btn-sm" style="background-color: #f8a5c2; color: #fff; border-color: #f78fb3;">Edit my goals</summary>
+      {% endif %}
+      <div class="mt-3">
+        <form action="{{ url_for('save_goals') }}" method="POST">
+          {% for item in weekly_goals.goal_list %}
+          <div class="row align-items-center mb-2">
+            <label class="col-6 col-form-label" for="goal-{{ item.key }}">{{ item.icon }} {{ item.label }}</label>
+            <div class="col-3">
+              <input type="number" class="form-control form-control-sm" id="goal-{{ item.key }}"
+                     name="{{ item.key }}" min="1" max="50" required
+                     value="{{ item.target if item.target else '' }}">
+            </div>
+            <!-- Hint: what the user did last week, to help them choose a challenging number -->
+            <small class="col-3 text-muted">last week: {{ item.last_week }}</small>
+          </div>
+          {% endfor %}
+          <button type="submit" class="btn btn-primary btn-sm float-end">
+            {{ 'Save changes' if weekly_goals.has_goals else 'Start my week' }}
+          </button>
+        </form>
+      </div>
+ {% if weekly_goals.has_goals %}
+      </details>
+      {% endif %}
+    </div>
+  </div>
+</div>

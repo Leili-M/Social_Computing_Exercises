@@ -1,0 +1,38 @@
+{#
+  Coding Assignment 3 - Feature B: Progressive access
+  Design Claim 25 (Chapter 5): new accounts earn privileges step by step.
+  Shown only to users who have not unlocked the Member level yet.
+#}
+<div class="col-md-8 mx-auto mb-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h5 class="card-title mb-0">🔓 Your access level</h5>
+        <span class="badge bg-warning text-dark">{{ access_level.level }}</span>
+      </div>
+      <p class="text-muted small">Welcome! To keep MiniSocial safe from spam, new accounts start with a few limits.
+         Complete these steps to unlock the <strong>Member</strong> level:</p>
+
+      <!-- Checklist with progress for each step -->
+      {% for step in access_level.steps %}
+      <div class="mb-2">
+        <div class="d-flex justify-content-between">
+          <span>{{ '✅' if step.complete else '⬜' }} {{ step.label }}</span>
+          <span>{{ step.done }} / {{ step.target }}</span>
+        </div>
+        <div class="progress" style="height: 8px;">
+          <div class="progress-bar {{ 'bg-success' if step.complete else 'bg-warning' }}"
+               role="progressbar" style="width: {{ (step.done * 100 / step.target)|int }}%;"></div>
+        </div>
+      </div>
+      {% endfor %}
+
+      <!-- What is still locked -->
+      <p class="mb-1 mt-3"><strong>Locked until you are a Member:</strong></p>
+      <ul class="mb-0">
+        <li>👥 Following more than {{ access_level.follow_limit }} people (you can follow {{ access_level.follows_left }} more)</li>
+        <li>✍️ More than {{ access_level.posts_per_day }} posts per day (you have {{ access_level.posts_left_today }} left today)</li>
+      </ul>
+    </div>
+  </div>
+</div>

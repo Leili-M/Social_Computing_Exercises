@@ -1,0 +1,32 @@
+{#
+  Coding Assignment 3 - Feature A: Welcome new members
+  Design Claim 18 (Chapter 5): friendly interactions with existing members soon after joining
+  help newcomers stay longer and contribute more.
+  Design Claim 20 (Chapter 5): welcomers help newcomers. Here every existing member can be a welcomer.
+#}
+<div class="col-md-8 mx-auto mb-4">
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <h5 class="card-title mb-1">🌱 Say hello to our new members</h5>
+      <p class="text-muted small mb-3">They joined in the last {{ newcomer_days }} days. A friendly first reply makes newcomers much more likely to stay!</p>
+
+      {% for post in newcomers_to_welcome %}
+      <div class="border rounded p-2 mb-2">
+        <div class="d-flex justify-content-between">
+          <a href="/u/{{ post.username }}"><strong>@{{ post.username }}</strong></a>
+          <span class="badge bg-success">New member 🌱</span>
+        </div>
+        <p class="mb-2">{{ post.content|truncate(120) }}</p>
+
+        <!-- The welcome message is ready but can be changed. It is sent as a normal comment
+             (so it also goes through the friendly check from Coding Assignment 2). -->
+        <form action="{{ url_for('add_comment', post_id=post.id) }}" method="POST" class="d-flex gap-2">
+          <input type="text" class="form-control form-control-sm" name="content" required
+                 value="Welcome to MiniSocial, @{{ post.username }}! 👋 Happy to have you here.">
+          <button type="submit" class="btn btn-success btn-sm text-nowrap">Say welcome 👋</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>

@@ -214,10 +214,16 @@ def feed():
     # Coding Assignment 1 - Feature 2: data for the weekly goals card (only for logged-in users)
     weekly_goals = get_weekly_goals(current_user_id) if current_user_id else None
     following_activity = get_following_activity(current_user_id) if current_user_id else None
+    # Coding Assignment 3 - Feature B: the user's access level (for the access card)
+    access_level = get_access_level(current_user_id) if current_user_id else None
+     # Coding Assignment 3 - Feature A: newcomers' posts to welcome (for the welcome card)
+    newcomers_to_welcome = get_newcomers_to_welcome(current_user_id) if current_user_id else []
     #  4. Render Template with Pagination Info 
     return render_template('feed.html.j2', 
                            weekly_goals = weekly_goals,
                            following_activity=following_activity,
+                           access_level=access_level,
+                           newcomers_to_welcome=newcomers_to_welcome,
                            posts=posts_data, 
                            current_sort=sort,
                            current_show=show,
@@ -240,7 +246,17 @@ def add_post():
     content = request.form.get('content')
 
     # Pass the user's content through the moderation function
+        # Pass the user's content through the moderation function
     moderated_content = content
+
+    # Coding Assignment 3 - Feature B (progressive access): newcomers have a daily post limit
+    access = get_access_level(user_id)
+    if access and not access['unlocked'] and access['posts_left_today'] == 0:
+        flash(f'New members can write {NEWCOMER_POSTS_PER_DAY} posts per day. '
+              'You can write more tomorrow, or unlock the Member level (see your progress below).', 'warning')
+        return redirect(url_for('feed'))
+
+  
     # Coding Assignment 2: friendly check before posting (Design Claims 23 and 31)
     if content and content.strip():
         review = needs_review('post', content)
@@ -666,6 +682,15 @@ def follow_user(user_id):
     if follower_id == user_id:
         flash("You cannot follow yourself.", "warning")
         return redirect(request.referrer or url_for('feed'))
+        
+    # Coding Assignment 3 - Feature B (progressive access): newcomers can follow a limited number of people
+    access = get_access_level(follower_id)
+    if access and not access['unlocked'] and access['follows_left'] == 0:
+        flash(f'New members can follow up to {NEWCOMER_FOLLOW_LIMIT} people. '
+              'Unlock the Member level to follow more (see your progress on the home page).', 'warning')
+        return redirect(request.referrer or url_for('feed'))
+       
+    
 
     # Check if the user to be followed actually exists
     user_to_follow = query_db('SELECT id FROM users WHERE id = ?', (user_id,), one=True)
@@ -1269,9 +1294,10 @@ def moderate_content(content):
 #   - small problems (Tier 3 words, links, CAPS): friendly reminder, user may edit or post anyway
 #   - severe problems (Tier 1 / Tier 2): the text cannot be published, the user must edit it
 # ---------------------------------------------------------------
-def check_before_publish(content):
+def check_before_publish(content, user_id=None):
     """Returns the friendly list of problems found in the text, and whether they are severe."""
     moderated, score = moderate_content(content)
+
 
     if moderated.startswith('[content removed due to severe violation]'):
         return {'severe': True, 'issues': ['It contains words that are not allowed in our community.']}
@@ -1296,7 +1322,7 @@ def review_content():
     if not pending or not session.get('user_id'):
         return redirect(url_for('feed'))
 
-    check = check_before_publish(pending['content'])
+    check = check_before_publish(pending['content'], session.get('user_id'))
     if pending['kind'] == 'comment':
         action = url_for('add_comment', post_id=pending['post_id'])
     else:
@@ -1327,7 +1353,7 @@ def needs_review(kind, content, post_id=None):
     The user skips the reminder only by clicking "Post anyway" (confirmed=yes),
     and this is never allowed for severe problems.
     """
-    check = check_before_publish(content)
+    check = check_before_publish(content, session.get('user_id'))
     confirmed = request.form.get('confirmed') == 'yes'
     if check['severe'] or (check['issues'] and not confirmed):
         session['pending'] = {'kind': kind, 'content': content, 'post_id': post_id}
@@ -1337,6 +1363,25 @@ def needs_review(kind, content, post_id=None):
 
 # Coding Assignment #3
 # Assignment 3.1
+# Reactions that count as "the user liked this post".
+POSITIVE_REACTIONS = ('like', 'love', 'haha', 'wow')
+
+# Very common English words that say nothing about a topic, so they are ignored.
+STOP_WORDS = set("""
+a an the and or but if so of to in on at for from with by about as into than then
+is are was were be been being am do does did done have has had having i me my we our
+you your he she it its they them their this that these those there here what which who
+how why when where all any some no not only just very too can will would should could
+get got go going make made one two new day today time really much more most out up
+off over again still even also like love feel feeling im it's i'm dont don't
+""".split())
+
+def topic_words(text):
+    """Turns a post into a set of meaningful lowercase words (hashtags included, without '#')."""
+    words = re.findall(r"[a-z]+", (text or '').lower())
+    return {w for w in words if len(w) > 2 and w not in STOP_WORDS}
+
+
 def recommend(user_id, filter_following):
     """
     Args:
@@ -1346,20 +1391,180 @@ def recommend(user_id, filter_following):
     Returns:
         A list of 5 recommended posts, in reverse-chronological order.
 
-    To test whether your recommendation algorithm works, let's pretend we like the DIY topic. Here are some users that often post DIY comment and a few example posts. Make sure your account did not engage with anything else. You should test your algorithm with these and see if your recommendation algorithm picks up on your interest in DIY and starts showing related content.
-    
-    Users: @starboy99, @DancingDolphin, @blogger_bob
-    Posts: 1810, 1875, 1880, 2113
-    
-    Materials: 
-    - https://www.nvidia.com/en-us/glossary/recommendation-system/
-    - http://www.configworks.com/mz/handout_recsys_sac2010.pdf
-    - https://www.researchgate.net/publication/227268858_Recommender_Systems_Handbook
+    Algorithm (simple content-based + social recommendation):
+      1. Find the posts the user reacted to positively (like, love, haha, wow).
+      2. Build an "interest profile": how often each topic word appears in those posts.
+      3. Score every other post: the sum of the profile weights of its words,
+         plus a bonus if the author is someone the user follows,
+         plus a bonus if the user already liked other posts from the same author.
+      4. Take the 5 posts with the highest score and show them newest first.
+      If the user has no positive reactions and follows nobody, the newest posts are shown.
     """
+    if not user_id:
+        # Not logged in: nothing to personalise, show the 5 newest posts
+        return query_db('''
+            SELECT p.id, p.content, p.created_at, u.username, u.id AS user_id
+            FROM posts p JOIN users u ON p.user_id = u.id
+            ORDER BY p.created_at DESC LIMIT 5
+        ''')
 
-    recommended_posts = {} 
+    # Step 1: posts the user reacted to positively
+    placeholders = ','.join('?' * len(POSITIVE_REACTIONS))
+    liked_posts = query_db(f'''
+        SELECT p.id, p.content, p.user_id
+        FROM reactions r JOIN posts p ON p.id = r.post_id
+        WHERE r.user_id = ? AND r.reaction_type IN ({placeholders})
+    ''', (user_id, *POSITIVE_REACTIONS))
 
-    return recommended_posts;
+    # Step 2: interest profile (word -> how many liked posts contain it)
+    profile = collections.Counter()
+    liked_authors = collections.Counter()
+    for post in liked_posts:
+        profile.update(topic_words(post['content']))
+        liked_authors[post['user_id']] += 1
+
+    followed_ids = {row['followed_id'] for row in
+                    query_db('SELECT followed_id FROM follows WHERE follower_id = ?', (user_id,))}
+    seen_ids = {row['post_id'] for row in
+                query_db('SELECT post_id FROM reactions WHERE user_id = ?', (user_id,))}
+
+    # Candidate posts: not written by the user and not already reacted to
+    candidates = query_db('''
+        SELECT p.id, p.content, p.created_at, u.username, u.id AS user_id
+        FROM posts p JOIN users u ON p.user_id = u.id
+        WHERE p.user_id != ?
+    ''', (user_id,))
+    candidates = [c for c in candidates if c['id'] not in seen_ids]
+    if filter_following:
+        candidates = [c for c in candidates if c['user_id'] in followed_ids]
+
+    # Step 3: score each candidate post
+    scored = []
+    for post in candidates:
+        score = sum(profile[w] for w in topic_words(post['content']))   # shared topics
+        if post['user_id'] in followed_ids:
+            score += 2                                                  # social bonus
+        score += min(liked_authors[post['user_id']], 3)                 # liked this author before
+        if score > 0:
+            scored.append((score, post['created_at'], post))
+
+    if not scored:
+        # Cold start: no signal yet, fall back to the newest posts
+        newest = sorted(candidates, key=lambda c: c['created_at'], reverse=True)[:5]
+        return newest
+
+    # Step 4: best 5 by score (newer first when scores are equal), then newest first
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    top5 = [item[2] for item in scored[:5]]
+    return sorted(top5, key=lambda c: c['created_at'], reverse=True)
+
+
+
+
+#ّFunctions for Assignment 3
+# ---------------------------------------------------------------
+# Coding Assignment 3 - Feature B: Progressive access
+# Chapter 5, Design Claim 25: New accounts earn privileges step by step (progressive access).
+# A new account starts at the "Newcomer" level with two limits:
+#   - it cannot share links (a common way to spread spam)
+#   - it can write at most NEWCOMER_POSTS_PER_DAY posts per day
+# The limits are removed ("Member" level) when the account is at least UNLOCK_DAYS old
+# AND has written at least UNLOCK_COMMENTS comments. A card on the feed shows the progress.
+# ---------------------------------------------------------------
+UNLOCK_DAYS = 3
+UNLOCK_COMMENTS = 2
+NEWCOMER_POSTS_PER_DAY = 3
+NEWCOMER_FOLLOW_LIMIT = 4
+
+
+def account_age_days(created_at):
+    """Number of days since the account was created (works with datetime or text)."""
+    if isinstance(created_at, str):
+        created_at = datetime.strptime(created_at, '%Y-%m-%d %H:%M:%S')
+    return (datetime.utcnow() - created_at).days if created_at else 9999
+
+
+def get_access_level(user_id):
+    """Returns the user's access level and their progress towards unlocking the Member level."""
+    user = query_db('SELECT created_at FROM users WHERE id = ?', (user_id,), one=True)
+    follows = query_db('SELECT COUNT(*) AS cnt FROM follows WHERE follower_id = ?', (user_id,), one=True)['cnt']
+    if not user:
+        return None
+    days = account_age_days(user['created_at'])
+    comments = query_db('SELECT COUNT(*) AS cnt FROM comments WHERE user_id = ?', (user_id,), one=True)['cnt']
+    today = datetime.utcnow().strftime('%Y-%m-%d 00:00:00')
+    posts_today = query_db('SELECT COUNT(*) AS cnt FROM posts WHERE user_id = ? AND created_at >= ?',
+                           (user_id, today), one=True)['cnt']
+
+    steps = [
+        {'label': f'Be a member for {UNLOCK_DAYS} days', 'done': min(days, UNLOCK_DAYS),
+         'target': UNLOCK_DAYS, 'complete': days >= UNLOCK_DAYS},
+        {'label': f'Write {UNLOCK_COMMENTS} comments on other posts', 'done': min(comments, UNLOCK_COMMENTS),
+         'target': UNLOCK_COMMENTS, 'complete': comments >= UNLOCK_COMMENTS},
+    ]
+    unlocked = all(step['complete'] for step in steps)
+    return {
+        'level': 'Member' if unlocked else 'Newcomer',
+        'unlocked': unlocked,
+        'steps': steps,
+        'posts_today': posts_today,
+        'posts_left_today': max(0, NEWCOMER_POSTS_PER_DAY - posts_today),
+        'posts_per_day': NEWCOMER_POSTS_PER_DAY,
+        'follow_limit': NEWCOMER_FOLLOW_LIMIT,
+        'follows_left': max(0, NEWCOMER_FOLLOW_LIMIT - follows),
+    }
+
+
+
+
+# ---------------------------------------------------------------
+# Coding Assignment 3 - Feature A: Welcome new members
+# Chapter 5, Design Claim 18: When newcomers have friendly interactions with existing
+#   members soon after joining, they stay longer and contribute more.
+# Chapter 5, Design Claim 20: Assigned welcomers help newcomers.
+# Members who joined less than NEWCOMER_DAYS ago get a "New member" badge in the feed,
+# and existing members see a card with newcomers' posts and a "Say welcome" button,
+# so every existing member can act as a welcomer.
+# ---------------------------------------------------------------
+NEWCOMER_DAYS = 7
+
+
+@app.context_processor
+def inject_newcomer_ids():
+    """Makes the ids of new members (for the badge) available in every template."""
+    since = (datetime.utcnow() - timedelta(days=NEWCOMER_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+    rows = query_db('SELECT id FROM users WHERE created_at >= ?', (since,)) or []
+    return {'newcomer_ids': {row['id'] for row in rows},
+            'newcomer_days': NEWCOMER_DAYS}
+
+
+def get_newcomers_to_welcome(user_id, limit=3):
+    """
+    Latest posts written by new members that the current user has not commented on yet.
+    Only shown to existing members (not to newcomers themselves).
+    """
+    me = query_db('SELECT created_at FROM users WHERE id = ?', (user_id,), one=True)
+    if not me or account_age_days(me['created_at']) < NEWCOMER_DAYS:
+        return []
+    since = (datetime.utcnow() - timedelta(days=NEWCOMER_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+    rows = query_db('''
+        SELECT p.id, p.content, p.created_at, u.username, u.id AS user_id
+        FROM posts p JOIN users u ON u.id = p.user_id
+        WHERE u.created_at >= ? AND u.id != ?
+          AND p.id = (SELECT MAX(id) FROM posts WHERE user_id = u.id)
+          AND u.id NOT IN (SELECT p2.user_id FROM comments c2
+                           JOIN posts p2 ON p2.id = c2.post_id
+                           WHERE c2.user_id = ?)
+        ORDER BY p.created_at DESC
+        LIMIT ?
+    ''', (since, user_id, user_id, limit))
+    welcome_list = []
+    for row in rows:
+        item = dict(row)
+        item['content'], _ = moderate_content(item['content'])
+        welcome_list.append(item)
+    return welcome_list
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)

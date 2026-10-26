@@ -2,6 +2,7 @@
 
 - [Coding Assignment 1: Contribution and Commitment](assignments/coding-assignment-1.md)
 - [Coding Assignment 2: Moderation](assignments/coding-assignment-2.md)
+- [Coding Assignment 3: Dealing with Newcomers](assignments/coding-assignment-3.md)
 
 ---
 

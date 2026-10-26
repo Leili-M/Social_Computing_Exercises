@@ -21,6 +21,15 @@
   </div>
 </div>
 {% endif %}
+<!-- Coding Assignment 3 - Feature B: access level card (only for users who are not Members yet) -->
+{% if access_level and not access_level.unlocked %}
+  {% include "access_card.html.j2" %}
+{% endif %}
+<!-- Coding Assignment 3 - Feature A: newcomers to welcome (only for existing members) -->
+{% if newcomers_to_welcome %}
+  {% include "welcome_card.html.j2" %}
+{% endif %}
+
 <!-- Coding Assignment 1 - Feature 2: weekly goals card (only for logged-in users) -->
 {% if weekly_goals %}
   {% include "goals_card.html.j2" %}
@@ -66,6 +75,12 @@
 </a>
           {% else %}
           <a href="/u/{{ entry.post.user_id }}">{{ user_display(entry.post.username) }} </a>
+          {% endif %}
+
+        
+          <!-- Coding Assignment 3 - Feature A: badge for members who joined in the last 7 days -->
+          {% if entry.post.user_id in newcomer_ids %}
+          <span class="badge bg-success fs-6 align-middle">New member 🌱</span>
           {% endif %}
         </h3>
 

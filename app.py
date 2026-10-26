@@ -45,6 +45,26 @@ with sqlite3.connect(DATABASE) as setup_conn:
         )
     ''')
 
+    # Coding Assignment 1 - Feature 2 (fix after feedback): the "first reply" to each post.
+    # One row per post (post_id is the PRIMARY KEY), saved at the moment the first reply is written.
+    # Deleting a comment later does not change this row, so the credit always stays with the right user.
+    setup_conn.execute('''
+        CREATE TABLE IF NOT EXISTS first_replies (
+            post_id    INTEGER PRIMARY KEY,
+            user_id    INTEGER NOT NULL,
+            created_at TEXT    NOT NULL
+        )
+    ''')
+    # Fill the table once from the comments that already exist (earliest reply by time wins).
+    # INSERT OR IGNORE never changes a row that is already saved.
+    setup_conn.execute('''
+        INSERT OR IGNORE INTO first_replies (post_id, user_id, created_at)
+        SELECT c.post_id, c.user_id, c.created_at
+        FROM comments c JOIN posts p ON p.id = c.post_id
+        WHERE c.user_id != p.user_id
+        ORDER BY c.created_at, c.id
+    ''')
+
 def get_db():
     """
     Connect to the application's configured database. The connection
@@ -547,10 +567,16 @@ def add_comment(post_id):
     # Basic validation to ensure comment is not empty
 
     # Basic validation to ensure comment is not empty
-    if content and content.strip():
-        db = get_db()
-        db.execute('INSERT INTO comments (post_id, user_id, content) VALUES (?, ?, ?)',
-                   (post_id, user_id, content))
+        if content and content.strip():
+        # Coding Assignment 1 - Feature 2 (fix): if this is the first reply to someone else's post,
+        # remember who wrote it. INSERT OR IGNORE does nothing if the post already has a first reply.
+            post = query_db('SELECT user_id FROM posts WHERE id = ?', (post_id,), one=True)
+            db = get_db()
+            db.execute('INSERT INTO comments (post_id, user_id, content) VALUES (?, ?, ?)',
+                    (post_id, user_id, content))
+            if post and post['user_id'] != user_id:
+                db.execute('INSERT OR IGNORE INTO first_replies (post_id, user_id, created_at) VALUES (?, ?, ?)',
+                        (post_id, user_id, datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')))
         db.commit()
         flash('Your comment was added.', 'success')
     else:
@@ -1022,14 +1048,14 @@ def count_activity(user_id, start, end):
 
     # A comment counts as a "help" if it was the first comment on that post
     # (it has the smallest id of all comments on the post) and the post is not the user's own.
+        # A "help" is being the first person to reply to someone else's post.
+    # This is read from the first_replies table, which is saved when the reply is written,
+    # so deleted comments or the order of ids cannot move the credit to another user.
     helps = query_db('''
         SELECT COUNT(*) AS cnt
-        FROM comments c
-        JOIN posts p ON p.id = c.post_id
-        WHERE c.user_id = ? AND c.created_at >= ? AND c.created_at < ?
-          AND p.user_id != ?
-          AND c.id = (SELECT MIN(id) FROM comments WHERE post_id = c.post_id)
-    ''', (user_id, start_s, end_s, user_id), one=True)['cnt']
+        FROM first_replies
+        WHERE user_id = ? AND created_at >= ? AND created_at < ?
+    ''', (user_id, start_s, end_s), one=True)['cnt']
 
     return {'posts': posts, 'comments': comments, 'help': helps}
 

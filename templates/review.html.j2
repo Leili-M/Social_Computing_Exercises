@@ -1,0 +1,60 @@
+{% extends "base.html.j2" %}
+{% block content %}
+{#
+  Coding Assignment 2 - "Friendly check before posting"
+  Design Claim 23 (Chapter 4): face-saving ways to correct norm violations increase compliance.
+  Design Claim 31 (Chapter 4): graduated sanctions increase the legitimacy of sanctions.
+  This page is private: only the author sees it, and nothing has been published yet.
+#}
+<div class="col-md-8 mx-auto">
+  <div class="card shadow-sm">
+    <div class="card-body">
+
+      {% if severe %}
+        <!-- Level 2 (severe): the text cannot be published, but the message stays polite -->
+        <h4 class="card-title">✋ Let's change this before posting</h4>
+        <p>You may not have been aware of it, but your {{ kind }} cannot be published as it is:</p>
+      {% else %}
+        <!-- Level 1 (small problem): a friendly, face-saving reminder -->
+        <h4 class="card-title">👋 Quick check before posting</h4>
+        <p>No big deal! You may not have been aware of our <a href="{{ url_for('rules') }}">community rules</a>.
+           Before your {{ kind }} is published, please have a look:</p>
+      {% endif %}
+
+      <!-- The problems found, explained in simple words -->
+      <ul>
+        {% for issue in issues %}
+        <li>{{ issue }}</li>
+        {% endfor %}
+      </ul>
+
+      {% if not severe %}
+      <!-- Shows the user exactly what others will see if they post without changes -->
+      <p class="mb-1 text-muted">If you post it now, others will see:</p>
+      <div class="border rounded p-2 mb-3 bg-light">{{ preview }}</div>
+      {% endif %}
+
+      <!-- The user can fix the text themselves (the main, recommended option) -->
+      <form action="{{ action }}" method="POST">
+        <label class="form-label" for="review-content"><strong>Edit your {{ kind }}:</strong></label>
+        <textarea class="form-control mb-3" id="review-content" name="content" rows="4" required>{{ content }}</textarea>
+
+        <div class="d-flex justify-content-between">
+          <a href="{{ url_for('cancel_review') }}" class="btn btn-light">Cancel</a>
+          <div>
+            {% if not severe %}
+            <!-- "Post anyway" publishes the text in the box without another check (confirmed=yes).
+                 Only shown for small problems; the words and links will still be hidden for others. -->
+            <button type="submit" class="btn btn-outline-secondary" name="confirmed" value="yes">
+              Post anyway
+            </button>
+            {% endif %}
+            <button type="submit" class="btn btn-primary">Post edited version</button>
+          </div>
+        </div>
+      </form>
+
+    </div>
+  </div>
+</div>
+{% endblock %}

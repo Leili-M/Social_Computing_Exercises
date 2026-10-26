@@ -1,6 +1,7 @@
 # My Coding Assignments
 
 - [Coding Assignment 1: Contribution and Commitment](assignments/coding-assignment-1.md)
+- [Coding Assignment 2: Moderation](assignments/coding-assignment-2.md)
 
 ---
 

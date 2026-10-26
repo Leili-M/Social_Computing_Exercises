@@ -241,6 +241,11 @@ def add_post():
 
     # Pass the user's content through the moderation function
     moderated_content = content
+    # Coding Assignment 2: friendly check before posting (Design Claims 23 and 31)
+    if content and content.strip():
+        review = needs_review('post', content)
+        if review:
+            return review
 
     # Basic validation to ensure post is not empty
     if moderated_content and moderated_content.strip():
@@ -517,6 +522,14 @@ def add_comment(post_id):
     # Get content from the submitted form
     content = request.form.get('content')
 
+    # Coding Assignment 2: friendly check before posting (Design Claims 23 and 31)
+    if content and content.strip():
+        review = needs_review('comment', content, post_id)
+        if review:
+            return review
+
+    # Basic validation to ensure comment is not empty
+
     # Basic validation to ensure comment is not empty
     if content and content.strip():
         db = get_db()
@@ -527,8 +540,11 @@ def add_comment(post_id):
     else:
         flash('Comment cannot be empty.', 'warning')
 
-    # Redirect back to the page the user came from (likely the post detail page)
-    return redirect(request.referrer or url_for('post_detail', post_id=post_id))
+    # Redirect back to the page the user came from (likely the post detail page).
+    # If the comment was sent from the reminder page, go to the post instead.
+    if not request.referrer or '/review' in request.referrer:
+        return redirect(url_for('post_detail', post_id=post_id))
+    return redirect(request.referrer)
 
 @app.route('/comments/<int:comment_id>/delete', methods=['POST'])
 def delete_comment(comment_id):
@@ -1118,6 +1134,7 @@ def get_following_activity(user_id, limit=5):
 # ----- Functions to be implemented are below
 # Coding Assignment #2
 
+
 # Assignment 2.2
 def user_risk_analysis(user_id):
     """
@@ -1125,41 +1142,198 @@ def user_risk_analysis(user_id):
         user_id: The ID of the user on which we perform risk analysis.
 
     Returns:
-        A float number score showing the risk associated with this user. There are no strict rules or bounds to this score, other than that a score of less than 1.0 means no risk, 1.0 to 3.0 is low risk, 3.0 to 5.0 is medium risk and above 5.0 is high risk. (An upper bound of 5.0 is applied to this score elsewhere in the codebase) 
-        
-        You will be able to check the scores by logging in with the administrator account:
-            username: admin
-            password: admin
-        Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
+        A float risk score for the user, following Rule 2.2 on the /rules page:
+        content_risk_score = profile_score * 1 + average_post_score * 3 + average_comment_score * 1,
+        then multiplied by 1.5 (account < 7 days old) or 1.2 (account < 30 days old),
+        and capped at 5.0.
     """
-    
-    score = 0
+    user = query_db('SELECT profile, created_at FROM users WHERE id = ?', (user_id,), one=True)
+    if not user:
+        return 0.0
 
-    return score;
+    # Step 1: score of the profile text
+    _, profile_score = moderate_content(user['profile'] or '')
 
-    
+    # Step 2: average score of all posts (0 if the user has no posts)
+    posts = query_db('SELECT content FROM posts WHERE user_id = ?', (user_id,))
+    post_scores = [moderate_content(p['content'])[1] for p in posts]
+    average_post_score = sum(post_scores) / len(post_scores) if post_scores else 0.0
+
+    # Step 3: average score of all comments (0 if the user has no comments)
+    comments = query_db('SELECT content FROM comments WHERE user_id = ?', (user_id,))
+    comment_scores = [moderate_content(c['content'])[1] for c in comments]
+    average_comment_score = sum(comment_scores) / len(comment_scores) if comment_scores else 0.0
+
+    # Step 4: weighted combination (posts count three times as much)
+    content_risk_score = (profile_score * 1) + (average_post_score * 3) + (average_comment_score * 1)
+
+    # Step 5: new accounts are riskier, so their score is multiplied
+    created_at = user['created_at']
+    if isinstance(created_at, str):
+        created_at = datetime.strptime(created_at, '%Y-%m-%d %H:%M:%S')
+    account_age_days = (datetime.utcnow() - created_at).days if created_at else 9999
+
+    if account_age_days < 7:
+        user_risk_score = content_risk_score * 1.5
+    elif account_age_days < 30:
+        user_risk_score = content_risk_score * 1.2
+    else:
+        user_risk_score = content_risk_score
+
+    # Step 6: the score can never be higher than 5.0
+    return min(user_risk_score, 5.0)
+
+
+# Regular expressions used by moderate_content().
+# A URL is either something that starts with http:// / https:// / www.,
+# or a domain name with a common ending (like shopfast.link or example.com), with an optional path.
+URL_PATTERN = re.compile(
+    r'(?:https?://|www\.)\S+'
+    r'|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|co|biz|info|link|xyz|ly|me|app|shop|store|online|site|club|top|click|ru|uk|fi|de|tv|gg)\b(?:/\S*)?',
+    re.IGNORECASE
+)
+
+
+def whole_word_pattern(words):
+    """Builds ONE case-insensitive regex that matches any of the given words or phrases,
+    but only as a whole word (so 'ass' does not match inside 'class').
+    Longer words are tried first, so a phrase is matched before a shorter word inside it."""
+    escaped = [re.escape(w) for w in sorted(words, key=len, reverse=True)]
+    return re.compile(r'(?<!\w)(?:' + '|'.join(escaped) + r')(?!\w)', re.IGNORECASE)
+
+
+# Build the patterns once when the app starts, instead of on every call (much faster).
+TIER1_PATTERN = whole_word_pattern(TIER1_WORDS)
+TIER2_PATTERN = whole_word_pattern(TIER2_PHRASES)
+TIER3_PATTERN = whole_word_pattern(TIER3_WORDS)
+
+
 # Assignment 2.1
 def moderate_content(content):
     """
     Args
-        content: the text content of a post or comment to be moderated.
-        
-    Returns: 
-        A tuple containing the moderated content (string) and a severity score (float). There are no strict rules or bounds to the severity score, other than that a score of less than 1.0 means no risk, 1.0 to 3.0 is low risk, 3.0 to 5.0 is medium risk and above 5.0 is high risk.
-    
-    This function moderates a string of content and calculates a severity score based on
-    rules loaded from the 'censorship.dat' file. These are already loaded as TIER1_WORDS, TIER2_PHRASES and TIER3_WORDS. Tier 1 corresponds to strong profanity, Tier 2 to scam/spam phrases and Tier 3 to mild profanity.
-    
-    You will be able to check the scores by logging in with the administrator account:
-            username: admin
-            password: admin
-    Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
-    """
+        content: the text content of a post, comment or profile to be moderated.
 
+    Returns:
+        A tuple (moderated_content, score), following Part 1 of the /rules page.
+    """
+    if not content:
+        return content, 0.0
+
+    # Stage 1.1: severe violations remove the whole content and give the maximum score
+    # Rule 1.1.1: Tier 1 words
+    if TIER1_PATTERN.search(content):
+        return "[content removed due to severe violation]", 5.0
+
+    # Rule 1.1.2: Tier 2 spam/scam phrases
+    if TIER2_PATTERN.search(content):
+        return "[content removed due to spam/scam policy]", 5.0
+
+    # Stage 1.2: scored violations, the content is filtered but kept
     moderated_content = content
-    score = 0
-    
+    score = 0.0
+
+    # Rule 1.2.1: each Tier 3 word is replaced with asterisks of the same length, +2.0 each
+    tier3_matches = TIER3_PATTERN.findall(moderated_content)
+    if tier3_matches:
+        score += 2.0 * len(tier3_matches)
+        moderated_content = TIER3_PATTERN.sub(lambda m: '*' * len(m.group(0)), moderated_content)
+
+    # Rule 1.2.2: each URL is replaced with [link removed], +2.0 each
+    urls = URL_PATTERN.findall(moderated_content)
+    if urls:
+        score += 2.0 * len(urls)
+        moderated_content = URL_PATTERN.sub('[link removed]', moderated_content)
+
+    # Rule 1.2.3: more than 15 letters and more than 70% of them uppercase, +0.5 (text not changed)
+    letters = [ch for ch in content if ch.isalpha()]
+    if len(letters) > 15:
+        uppercase_ratio = sum(1 for ch in letters if ch.isupper()) / len(letters)
+        if uppercase_ratio > 0.7:
+            score += 0.5
+
     return moderated_content, score
+
+
+
+
+#Functions of Assignment 2
+# ---------------------------------------------------------------
+# Coding Assignment 2 - Design Claim feature: "Friendly check before posting"
+# Chapter 4, Design Claim 23: Face-saving ways to correct norm violations increase compliance.
+# Chapter 4, Design Claim 31: Graduated sanctions increase the legitimacy and thus the
+#                             effectiveness of sanctions.
+# Before a post or comment is published, it is checked with moderate_content().
+# If it breaks a rule, the user first gets a private, friendly reminder (no public
+# punishment) and can fix the text themselves. The reaction is graduated:
+#   - small problems (Tier 3 words, links, CAPS): friendly reminder, user may edit or post anyway
+#   - severe problems (Tier 1 / Tier 2): the text cannot be published, the user must edit it
+# ---------------------------------------------------------------
+def check_before_publish(content):
+    """Returns the friendly list of problems found in the text, and whether they are severe."""
+    moderated, score = moderate_content(content)
+
+    if moderated.startswith('[content removed due to severe violation]'):
+        return {'severe': True, 'issues': ['It contains words that are not allowed in our community.']}
+    if moderated.startswith('[content removed due to spam/scam policy]'):
+        return {'severe': True, 'issues': ['It looks like spam or a scam, which is not allowed here.']}
+
+    issues = []
+    if TIER3_PATTERN.search(content):
+        issues.append('It contains words that some members may find rude. They will be hidden with *** .')
+    if URL_PATTERN.search(content):
+        issues.append('It contains a link. Links are removed to protect members from spam.')
+    letters = [ch for ch in content if ch.isalpha()]
+    if len(letters) > 15 and sum(1 for ch in letters if ch.isupper()) / len(letters) > 0.7:
+        issues.append('It is written mostly in CAPITAL LETTERS, which can feel like shouting.')
+    return {'severe': False, 'issues': issues}
+
+
+@app.route('/review')
+def review_content():
+    """Shows the friendly reminder page for a post or comment that is waiting in the session."""
+    pending = session.get('pending')
+    if not pending or not session.get('user_id'):
+        return redirect(url_for('feed'))
+
+    check = check_before_publish(pending['content'])
+    if pending['kind'] == 'comment':
+        action = url_for('add_comment', post_id=pending['post_id'])
+    else:
+        action = url_for('add_post')
+
+    return render_template('review.html.j2',
+                           content=pending['content'],
+                           preview=moderate_content(pending['content'])[0],
+                           issues=check['issues'],
+                           severe=check['severe'],
+                           kind=pending['kind'],
+                           action=action)
+
+
+@app.route('/review/cancel')
+def cancel_review():
+    """The user decided not to publish the text."""
+    pending = session.pop('pending', None)
+    if pending and pending['kind'] == 'comment':
+        return redirect(url_for('post_detail', post_id=pending['post_id']))
+    return redirect(url_for('feed'))
+
+
+def needs_review(kind, content, post_id=None):
+    """
+    Decides if the text must go to the reminder page first.
+    Returns a redirect to /review, or None if the text can be published now.
+    The user skips the reminder only by clicking "Post anyway" (confirmed=yes),
+    and this is never allowed for severe problems.
+    """
+    check = check_before_publish(content)
+    confirmed = request.form.get('confirmed') == 'yes'
+    if check['severe'] or (check['issues'] and not confirmed):
+        session['pending'] = {'kind': kind, 'content': content, 'post_id': post_id}
+        return redirect(url_for('review_content'))
+    session.pop('pending', None)
+    return None
 
 # Coding Assignment #3
 # Assignment 3.1
